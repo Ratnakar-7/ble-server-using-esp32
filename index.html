@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 Web BLE API</title>
+    <style>
+        body { font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 20px; }
+        .topnav { background-color: #333; color: white; padding: 10px; text-align: center; }
+        .content { padding: 20px; }
+        .card { background-color: #fff; border: 1px solid #ddd; padding: 20px; margin: 10px; border-radius: 8px; }
+        button { padding: 10px; font-size: 16px; margin: 5px; width: 100%; background-color: #4CAF50; color: white; border: none; border-radius: 5px; cursor: pointer; }
+        .gray-label { font-size: 14px; color: gray; }
+        .reading { font-size: 18px; font-weight: bold; white-space: pre-wrap; word-wrap: break-word; }
+        .console-output { background: black; color: lime; padding: 10px; font-family: monospace; height: 200px; overflow-y: auto; white-space: pre-wrap; }
+    </style>
+</head>
+<body>
+    <div class="topnav">
+        <h1>ESP32 Web BLE API</h1>
+    </div>
+    <div class="content">
+        <div class="card">
+            <button id="connectBleButton">Connect to BLE Device</button>
+            <button id="disconnectBleButton">Disconnect BLE Device</button>
+            <p class="gray-label">BLE state: <strong><span id="bleState" style="color:#d13a30;">Disconnected</span></strong></p>
+        </div>
+
+        <div class="card">
+            <h2>Send Command</h2>
+            <button onclick="sendCommand('GET_DATA')">GET DATA</button>
+            <button onclick="sendCommand('STATUS')">STATUS</button>
+            <button onclick="sendCommand('TIME')">TIME</button>
+        </div>
+
+        <div class="card">
+            <h2>Received Response</h2>
+            <p class="reading"><span id="valueContainer">Waiting...</span></p>
+            <p class="gray-label">Last response: <span id="timestamp"></span></p>
+        </div>
+
+        <div class="card">
+            <h2>Console Output</h2>
+            <div id="consoleOutput" class="console-output"></div>
+        </div>
+    </div>
+
+    <script>
+        const connectButton = document.getElementById('connectBleButton');
+        const disconnectButton = document.getElementById('disconnectBleButton');
+        const responseContainer = document.getElementById('valueContainer');
+        const bleStateContainer = document.getElementById('bleState');
+        const timestampContainer = document.getElementById('timestamp');
+        const consoleOutput = document.getElementById('consoleOutput');
+
+        const deviceName = 'ESP32_BLE_API'; // Must match ESP32 BLE name
+        const serviceUuid = '12345678-1234-1234-1234-123456789abc';
+        const commandCharUuid = 'abcd1234-5678-90ab-cdef-1234567890ab'; // Write
+        const responseCharUuid = 'dcba4321-8765-09ba-fedc-0987654321ba'; // Notify
+
+        let bleDevice, server, service, commandCharacteristic, responseCharacteristic;
+        let responseBuffer = "";  // Store merged response
+
+        connectButton.addEventListener('click', async () => {
+            if (!navigator.bluetooth) {
+                alert('Web Bluetooth API is not supported in this browser.');
+                return;
+            }
+
+            try {
+                bleDevice = await navigator.bluetooth.requestDevice({
+                    filters: [{ name: deviceName }],
+                    optionalServices: [serviceUuid]
+                });
+
+                bleDevice.addEventListener('gattserverdisconnected', onDisconnected);
+                server = await bleDevice.gatt.connect();
+                service = await server.getPrimaryService(serviceUuid);
+
+                commandCharacteristic = await service.getCharacteristic(commandCharUuid);
+                responseCharacteristic = await service.getCharacteristic(responseCharUuid);
+
+                await responseCharacteristic.startNotifications();
+                responseCharacteristic.addEventListener('characteristicvaluechanged', handleResponse);
+
+                bleStateContainer.textContent = 'Connected';
+                bleStateContainer.style.color = '#24af37';
+                logToConsole("✅ Connected to BLE device.");
+            } catch (error) {
+                logToConsole("❌ Error connecting: " + error);
+            }
+        });
+
+        disconnectButton.addEventListener('click', () => {
+            if (bleDevice && bleDevice.gatt.connected) {
+                bleDevice.gatt.disconnect();
+            }
+        });
+
+        function onDisconnected() {
+            bleStateContainer.textContent = 'Disconnected';
+            bleStateContainer.style.color = '#d13a30';
+            logToConsole("⚠️ BLE device disconnected.");
+        }
+
+        async function sendCommand(command) {
+            if (!commandCharacteristic) {
+                alert("Not connected to BLE device.");
+                return;
+            }
+
+            try {
+                responseBuffer = ""; // Reset buffer before new request
+                responseContainer.textContent = "Receiving...";
+                let encoder = new TextEncoder();
+                await commandCharacteristic.writeValue(encoder.encode(command));
+                logToConsole(`📤 Sent: ${command}`);
+            } catch (error) {
+                logToConsole("❌ Error sending command: " + error);
+            }
+        }
+
+        // function handleResponse(event) {
+        //     let chunk = new TextDecoder().decode(event.target.value);
+            
+        //     logToConsole(`📩 Received Chunk: ${chunk}`);
+
+        //     if (chunk === "END") {
+        //         responseContainer.textContent = responseBuffer;
+        //         timestampContainer.textContent = new Date().toLocaleString();
+        //         logToConsole("✅ Full response received: " + responseBuffer);
+        //         responseBuffer = "";  // Reset for next response
+        //     } else {
+        //         responseBuffer += chunk;  // Append received chunk
+        //     }
+        // }
+        // function handleResponse(event) {
+        //     let chunk = new TextDecoder().decode(event.target.value);
+            
+        //     logToConsole(` Received Chunk: ${chunk}`);
+            
+        //     responseBuffer += chunk;  // Append received chunk
+
+        //     // Check if the "END" marker is inside the buffer
+        //     if (responseBuffer.includes("END")) {
+        //         responseBuffer = responseBuffer.replace("END", ""); // Remove the marker
+        //         responseContainer.textContent = responseBuffer;
+        //         timestampContainer.textContent = new Date().toLocaleString();
+                
+        //         logToConsole("✅ Full response received: " + responseBuffer);
+        //         responseBuffer = "";  // Reset for next response
+        //     }   
+        // }
+
+        function handleResponse(event) {
+    let chunk = new TextDecoder().decode(event.target.value);
+    responseBuffer += chunk;  // Append received chunk
+
+    // Log without breaking into new lines
+    consoleOutput.innerHTML = `[${new Date().toLocaleTimeString()}] 📩 Received: ${responseBuffer}<br>`;
+    consoleOutput.scrollTop = consoleOutput.scrollHeight; // Auto-scroll
+
+    // Check if response is complete
+    if (responseBuffer.includes("END")) {
+        responseBuffer = responseBuffer.replace("END", ""); // Remove marker
+        responseContainer.textContent = responseBuffer;
+        timestampContainer.textContent = new Date().toLocaleString();
+
+        // Final log with full response
+        consoleOutput.innerHTML = `[${new Date().toLocaleTimeString()}] ✅ Full Response: ${responseBuffer}<br>`;
+        
+        responseBuffer = "";  // Reset for next response
+    }
+}
+
+        function logToConsole(message) {
+            let timestamp = new Date().toLocaleTimeString();
+            consoleOutput.innerHTML += `[${timestamp}] ${message}<br>`;
+            consoleOutput.scrollTop = consoleOutput.scrollHeight; // Auto-scroll
+        }
+    </script>
+</body>
+</html>
+
